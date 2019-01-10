@@ -23,7 +23,7 @@ Route::get('/hello', function () {
 });
 
 // protected endpoints
-Route::group(['middleware' => 'auth:api'], function () {
+Route::group(['middleware' => ['auth:api']], function () {
     Route::get('/protected-endpoint', 'SecretController@index');
     // more endpoints ...
 });

@@ -3,96 +3,110 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\Redis;
+use KeycloakGuard\Token;
+use Illuminate\Support\Facades\Session;
+use Illuminate\Support\Facades\Auth;
+use App\User;
+use KeycloakGuard\Exceptions\TokenException;
 
 class OpenIdController extends Controller
 {
-    public function home(Request $request)
+    private $kc_url = 'http://keycloak.qa.pbh/auth/realms/teste_cecilia/protocol/openid-connect';
+
+    public function token(Request $request)
     {
-        if(isset($request->code)) {
-            // $opts = array(
-            //     'http'=>array(
-            //       'method'=>"POST",
-            //       'header' => 'Content-type: application/xwww-form-urlencoded',
-			//       'content' => http_build_query(array(
-            //             'grant_type' => 'authorization_code',
-            //             'code' => $request->code,
-            //             'redirect_uri' => 'http%3A%2F%2Flocalhost%3A8000',
-            //             'client_id' => 'teste1',
-            //             'client_secret' => '$client_secret',
-            //         ))
-            //     )
-            //   );
-            // $context = stream_context_create($opts);
-            // // Open the file using the HTTP headers set above
-            // $file = file_get_contents('http://127.0.0.1:8080/auth/realms/test_keycloak/protocol/openid-connect/token', false, $context);
-            // dd($file);
+        if(!isset($request->code)) {
+            $qs = http_build_query([
+                'response_type' => 'code',
+                'scope'         => 'openid',
+                'client_id'     => 'teste1',
+                'redirect_uri'  => 'http://localhost:8000/token',
+                'state'         => str_random(6)
+                ]);
+                return redirect("$this->kc_url/auth?$qs");
 
-
+        } else {
             $cpost = http_build_query([
-                'grant_type' => 'authorization_code',
-                'code' => $request->code,
-                'redirect_uri' => 'http%3A%2F%2F127.0.0.1%3A8000',
-                'client_id' => 'teste1',
-                'client_secret' => '65b0d71d-0936-4f3b-a161-9540578ae917',
+                'grant_type'    => 'authorization_code',
+                'scope'         => 'openid',
+                'code'          => $request->code,
+                'redirect_uri'  => 'http://localhost:8000/token',
+                'client_id'     => 'teste1',
+                'client_secret' => '65b0d71d-0936-4f3b-a161-9540578ae917'
             ]);
-            // $client = new \GuzzleHttp\Client([
-            //     // You can set any number of default request options.
-            //     // 'timeout'   => 2000.0,
-            //     // 'debug'     => true,
-            //     'allow_redirects' => false,
-            //     'proxy'     => [
-            //         'http'  => 'http://mbarbosa:yobuYI40@cache01.pbh:3128',
-            //         'https' => 'http://mbarbosa:yobuYI40@cache01.pbh:3128',
-            //         'no'    => ['.pbh.gov.br', '127.0.0.1', 'localhost'] ,
-            //     ]
-            //     // 'headers'   => [
-            //     //     'Content-type' => 'application/json',
-            //     // ],
-            // ]);
-            // $res = $client->request(
-            //         'POST',
-            //         'http://127.0.0.1:8080/auth/realms/test_keycloak/protocol/openid-connect/token', [
-            //             'body' => $cpost
-            //         ]
-            // );
-            // echo $res->getStatusCode();
-            // // "200"
-            // echo $res->getHeader('content-type');
-            // // 'application/json; charset=utf8'
-            // echo $res->getBody();
-            // // {"type":"User"...'
-            // exit;
 
             $curl_handle=curl_init();
 
             curl_setopt($curl_handle, CURLOPT_HEADER, false);
             curl_setopt($curl_handle, CURLOPT_POST, true);
             curl_setopt($curl_handle, CURLOPT_POSTFIELDS, $cpost);
-            curl_setopt($curl_handle, CURLOPT_RETURNTRANSFER, false);
-            curl_setopt($curl_handle, CURLOPT_PROXY, 'http://cache01.pbh:3128');
-            curl_setopt($curl_handle, CURLOPT_PROXYUSERPWD, "mbarbosa:yobuYI40");
-            curl_setopt($curl_handle, CURLOPT_PROXYAUTH, CURLAUTH_ANY);
-            curl_setopt($curl_handle, CURLOPT_FOLLOWLOCATION, true);
-            // curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
-            // curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($curl_handle, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($curl_handle, CURLOPT_PROXY, '');
+            // curl_setopt($curl_handle, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($curl_handle, CURLOPT_URL, "$this->kc_url/token");
 
-            // curl_setopt($curl_handle, CURLOPT_HTTPPROXYTUNNEL, 1);
-            curl_setopt($curl_handle, CURLOPT_URL, 'http://127.0.0.1:8080/auth/realms/test_keycloak/protocol/openid-connect/token');
-
-            $result = curl_exec($curl_handle);
-            var_dump($result);
+            $result = \json_decode(curl_exec($curl_handle));
+            if(isset($result->id_token)) {
+                $id = Token::decode($result->id_token, config('keycloak.realm_public_key'));
+                $us = User::where('username', $id->preferred_username)->first();
+                if(!$us) {
+                    $us = new User();
+                    $us->username = $id->preferred_username;
+                    $us->email    = $id->email;
+                }
+                if(isset($result->access_token)) {
+                    $us->token = $result->access_token;
+                    // session(['access_token' => $result->access_token]);
+                    // session(['refresh_token'=> $result->refresh_token]);
+                    // session(['id_token'     => $result->id_token]);
+                    // session(['client_id'    => 'teste1']);
+                    Cookie::queue('access_token' , $result->access_token , 100, null, null, false, true);
+                    Cookie::queue('refresh_token', $result->refresh_token, 100, null, null, false, true);
+                    Cookie::queue('id_token'     , $result->id_token     , 100, null, null, false, true);
+                    Cookie::queue('client_id'    , 'teste1'              , 100, null, null, false, true);
+                }
+                $us->save();
+            }
             $info = curl_getinfo($curl_handle);
             $error = curl_error($curl_handle);
             curl_close($curl_handle);
+            return redirect("/");
 
-            // return redirect('http://127.0.0.1:8080/auth/realms/test_keycloak/protocol/openid-connect/token?grant_type=authorization_code&code='.$request->code.'&client_id=teste1&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2F&client_secret=');
         }
-
-        return view('welcome');
     }
 
     public function login()
     {
-        return redirect('http://127.0.0.1:8080/auth/realms/test_keycloak/protocol/openid-connect/auth?response_type=code&client_id=teste1&redirect_uri=http%3A%2F%2F127.0.0.1%3A8000%2F&state=d0e65e2d23');
+        try {
+            if(!Auth::guard('api')->check()) {
+                return redirect("/token");
+            } else {
+                $u = Auth::guard('api')->user();
+                return "logado como ".$u->email."!";
+            }
+        } catch(TokenException $e) {
+            return redirect("/token");
+        }
+    }
+
+    public function logout()
+    {
+        $qs = http_build_query([
+            'post_logout_redirect_uri'  => 'http://localhost:8000/',
+            'client_id'                 => session()->get('client_id'),
+            'client_secret'             => '65b0d71d-0936-4f3b-a161-9540578ae917',
+            'refresh_token'             => session()->get('refresh_token')
+        ]);
+        // session()->forget('id_token');
+        // session()->forget('access_token');
+        // session()->forget('refresh_token');
+        // session()->forget('client_id');
+        Cookie::queue(Cookie::forget('access_token'));
+        Cookie::queue(Cookie::forget('refresh_token'));
+        Cookie::queue(Cookie::forget('id_token'));
+        Cookie::queue(Cookie::forget('client_id'));
+        return redirect("$this->kc_url/logout?$qs");
     }
 }

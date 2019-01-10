@@ -1,5 +1,7 @@
 <?php
 
+use App\Extensions\KeycloakUserProvider;
+
 return [
 
     /*
@@ -42,9 +44,10 @@ return [
         ],
 
         'api' => [
-            //'driver' => 'token',
             'driver' => 'keycloak', # <-- Set the API guard driver to "keycloak"
-            'provider' => 'users',
+            'provider' => 'keycloak_users',
+            //'driver' => 'token',
+            // 'provider' => 'users',
         ],
     ],
     /*
@@ -67,6 +70,10 @@ return [
     'providers' => [
         'users' => [
             'driver' => 'eloquent',
+            'model' => App\User::class,
+        ],
+        'keycloak_users' => [
+            'driver' => 'kc_users',
             'model' => App\User::class,
         ],
 
